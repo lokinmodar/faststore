@@ -10,6 +10,7 @@ The system is active when `contentSource.type` is set to `'cp'` in `discovery.co
 
 ## Table of Contents
 
+- [Storage Backend](#storage-backend)
 - [Configuration](#configuration)
 - [Content Platform Client](#content-platform-client)
 - [ContentService — the shared facade](#contentservice--the-shared-facade)
@@ -21,6 +22,81 @@ The system is active when `contentSource.type` is set to `'cp'` in `discovery.co
   - [getPdpContent](#getpdpcontent)
 - [Preview Mode](#preview-mode)
 - [Data Flow](#data-flow)
+
+---
+
+## Storage Backend
+
+The VTEX Content Platform does **not** use VTEX MasterData at all. It has its own dedicated storage system exposed through a first-party REST API split into three planes:
+
+### API planes
+
+| Plane | Base URL | Purpose |
+|---|---|---|
+| **Data Plane** | `https://{tenant}.vtexcommercestable.com.br/api/content-platform/data` | Read published (live) content entries |
+| **Control Plane** | `https://{tenant}.vtexcommercestable.com.br/api/content-platform/manage` | Read draft / preview entries; manage branches |
+| **Schema Registry** | `https://{tenant}.vtexcommercestable.com.br/api/content-platform/schemas` | Register and retrieve content-type schemas |
+
+By default `ClientCP` derives `{tenant}` from `config.api.storeId` and uses the same base URL for both the data and control planes:
+
+```ts
+// packages/@vtex/client-cp/src/constants.ts
+export const getApiUrl = (tenant: string) =>
+  `https://${tenant}.vtexcommercestable.com.br`
+```
+
+Custom base URLs can be injected via the `controlPlaneBaseUrl` and `dataPlaneBaseUrl` constructor options.
+
+### URL structure for content entries
+
+Every entry URL is composed of four path segments that identify the storage location:
+
+```
+/api/content-platform/{plane}/{accountName}/{storeId}/{contentType}/entries[/{entryId}]
+```
+
+| Segment | Value in FastStore | Source |
+|---|---|---|
+| `{accountName}` | `config.api.storeId` (e.g. `storeframework`) | `discovery.config.js` → `api.storeId` |
+| `{storeId}` | `'faststore'` (hardcoded) | `ContentService.convertOptionsToParams()` |
+| `{contentType}` | e.g. `home`, `plp`, `pdp`, `landingPage` | Passed in `ContentParams.contentType` |
+| `{entryId}` | UUID assigned by Content Platform | Corresponds to `documentId` / `ContentParams.documentId` |
+
+Example URL for fetching a single published home-page entry:
+
+```
+GET https://storeframework.vtexcommercestable.com.br/api/content-platform/data/storeframework/faststore/home/entries/abc-123
+```
+
+### Schema Registry
+
+Content-type schemas are registered in the Schema Registry. The FastStore schema file is:
+
+**File:** `cms/faststore/schema.json`
+
+```json
+{
+  "$id": "https://vtex.vtexcommercestable.com.br/api/content-platform/schemas/vtex/faststore",
+  "title": "FastStore Schema",
+  "content-types": { ... },
+  "components":    { ... }
+}
+```
+
+The `$id` is the canonical URL of the schema in the Schema Registry. This file is the Content Platform equivalent of the `content-types.json` + `sections.json` pair used by the legacy Headless CMS — it defines all registered content types and component schemas in a single JSON document.
+
+The `base.jsonc` file (`cms/faststore/base.jsonc`) is the editable source for schema authoring. It is **excluded** from the generated `.faststore` temp folder (listed in `ignorePaths` inside `packages/cli/src/utils/generate.ts`). The committed `schema.json` is the pre-compiled result that contains all content types and component definitions fully resolved — it is this file that gets registered with the Schema Registry, not `base.jsonc` directly.
+
+### Branch (version) model
+
+Content Platform uses a **branch** model for versioning:
+
+| Concept | Field in `EntryPathParams` | Description |
+|---|---|---|
+| Published entry | `entryId` only | The live version read from the Data Plane |
+| Branch preview | `branchId` (= `versionId` or `releaseId`) | A named branch of changes, read from the Control Plane |
+
+This differs from the Headless CMS model where individual `versionId` / `releaseId` values identify specific snapshots; in Content Platform both map to the same `branchId` field and are handled by the Control Plane.
 
 ---
 

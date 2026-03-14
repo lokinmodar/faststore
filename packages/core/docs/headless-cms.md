@@ -8,6 +8,7 @@ The system is active when `contentSource.type` is set to `'CMS'` (the default) i
 
 ## Table of Contents
 
+- [Storage Backend](#storage-backend)
 - [Configuration](#configuration)
 - [CMS Client](#cms-client)
 - [Core Fetch Functions](#core-fetch-functions)
@@ -20,6 +21,72 @@ The system is active when `contentSource.type` is set to `'CMS'` (the default) i
 - [Preview Mode](#preview-mode)
 - [CMS Content Definitions](#cms-content-definitions)
 - [Data Flow](#data-flow)
+
+---
+
+## Storage Backend
+
+The VTEX Headless CMS stores content in **VTEX MasterData V2**, but that storage is fully managed by the **`vtex.admin-cms` VTEX IO app** (a.k.a. "Headless CMS"). The FastStore codebase never reads from or writes to MasterData directly — all content access goes through the HTTP API that the IO app exposes.
+
+### API endpoint
+
+All CMS content reads go through the single base URL constructed by `ClientCMS`:
+
+```
+https://{workspace}--{tenant}.myvtex.com/_v/cms/api/{builder}/
+```
+
+| URL segment | Source | Example |
+|---|---|---|
+| `{workspace}` | `config.api.workspace` | `master` |
+| `{tenant}` | `config.api.storeId` | `storeframework` |
+| `{builder}` | `contentSource.project` (default `faststore`) | `faststore` |
+
+The `/_v/` prefix identifies this as a **VTEX IO app route** — the request is handled server-side by the `vtex.admin-cms` app, not by the VTEX Core Commerce APIs.
+
+### How `vtex.admin-cms` stores data internally
+
+The `vtex.admin-cms` VTEX IO app stores CMS content in **VTEX MasterData V2** under its own managed entities and schemas. These are private to the app; FastStore interacts with them only indirectly through the HTTP API above. The key concepts are:
+
+| Concept | What it is | MasterData mapping |
+|---|---|---|
+| **Document** | A single CMS page instance (e.g. the Home page, or a specific PLP template) | One MasterData V2 document, identified by `documentId` |
+| **Version** | A saved snapshot/draft of a document | A sub-resource of the document, identified by `versionId` |
+| **Release** | A named group of scheduled document versions | A separate MasterData V2 document linking multiple versions, identified by `releaseId` |
+| **Content type** | The schema that defines what fields/sections a document can have | A MasterData V2 schema registered by `vtex.admin-cms` |
+
+The `content-types.json` and `sections.json` files in `cms/faststore/` declare **which content types and sections exist**; they are synced to the `vtex.admin-cms` app via the `faststore cms-sync` command. That command (in `packages/cli/src/commands/cms-sync.ts`) merges core and user definitions and then delegates to `vtex cms sync` (the VTEX IO CLI), which registers them as schemas inside the app's MasterData entity.
+
+### MasterData data entity for page content
+
+The MasterData V2 **data entity** used by `vtex.admin-cms` to persist page content is internal to the app and is not directly queryable from outside. The entity identifier is managed by the app itself (it does not follow the standard user-accessible `CL`, `AD`, etc. naming). Accessing or modifying CMS pages must be done through the `/_v/cms/api/` HTTP interface rather than the MasterData REST API (`/api/dataentities/`).
+
+### Schema sync flow
+
+```
+cms/faststore/content-types.json    ──┐
+cms/faststore/sections.json         ──┤  `faststore cms-sync` (FastStore CLI wrapper)
+user/cms/faststore/content-types.json ┤  packages/cli/src/commands/cms-sync.ts
+user/cms/faststore/sections.json    ──┘
+        │
+        ▼  merged and written to .faststore/cms/faststore/
+        │
+        ▼  `vtex cms sync {builder}` (VTEX IO CLI — invoked internally by faststore cms-sync)
+        │
+        ▼  HTTP POST → vtex.admin-cms VTEX IO app
+                │
+                └─ Registers content-type schemas in MasterData V2
+```
+
+### MasterData entities used by the broader FastStore API (not CMS)
+
+For completeness, the `packages/api` layer uses the following MasterData entities directly — these are **not** related to CMS content:
+
+| Entity | Endpoint | Purpose |
+|---|---|---|
+| `NL` | `POST /api/dataentities/NL/documents/` | Newsletter opt-in subscription |
+| `CL` | `GET /api/dataentities/CL/documents/{id}` | Customer contract data |
+| `shopper` | `GET /api/dataentities/shopper/search` | Shopper profile lookup |
 
 ---
 
